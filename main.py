@@ -1,7 +1,10 @@
 import streamlit as st
 import pandas as pd
 import io
+from datetime import datetime
 
+# 1. PAGE & ACCESS CONFIGURATION
+st.set_page_config(page_title="Monitor KPIs - Dashboard Operativo", layout="wide")
 
 def check_password():
     """Returns True if the user had the correct password."""
@@ -27,153 +30,158 @@ def check_password():
         return True
     
 if check_password():
-
-    # 1. PAGE CONFIGURATION
-    st.set_page_config(page_title="Monitor KPIs Transporte", layout="wide")
-
-    st.title("🚚 Monitor de KPIs de Unidades")
-    st.markdown("Control de Viajes, Facturación, Kilometraje y Productividad.")
-
-    # 2. DATA PROCESSING FUNCTION WITH ERROR HANDLING
+    # 2. DATA PROCESSING ENGINE (INTERNAL LOGIC IN ENGLISH)
     @st.cache_data
-    def process_data(file):
+    def process_full_data(report_file, master_file):
         """
-        Reads the excel file, validates columns, and cleans data types.
-        Returns: (DataFrame, unit_column_name) or (error_message, None)
+        Handles asymmetric headers: Master (Row 1) | Report (Row 2)
         """
         try:
-            # Read excel skipping the first title row (header=1)
-            raw_df = pd.read_excel(file, sheet_name=0, header=1)
-            if raw_df.empty: 
-                return "error_empty_file", None
+            # Master: Row 1 (header=0) | Report: Row 2 (header=1)
+            df_master = pd.read_excel(master_file, header=0)
+            df_master.columns = df_master.columns.str.lower().str.strip()
             
-            # Clean unnamed and empty columns
-            clean_df = raw_df.loc[:, ~raw_df.columns.astype(str).str.contains("Unnamed")].dropna(axis=1, how="all")
+            df_report = pd.read_excel(report_file, header=1)
+            df_report = df_report.loc[:, ~df_report.columns.astype(str).str.contains("Unnamed")].dropna(axis=1, how="all")
             
-            # Validate mandatory business columns
-            required_cols = ["Tractor", "Fecha", "Unidad de negocios", "Viaje", "Precio Cliente", "Distancia total"]
-            missing_cols = [c for c in required_cols if c not in clean_df.columns]
-            if missing_cols: 
-                return f"error_missing_columns: {', '.join(missing_cols)}", None
+            # Unit ID Logic (Tractor + 1)
+            report_cols = list(df_report.columns)
+            tractor_idx = report_cols.index("Tractor")
+            unit_col = report_cols[tractor_idx + 1]
 
-            # Identify Unit ID column (the one to the right of 'Tractor')
-            all_cols = list(clean_df.columns)
-            tractor_idx = all_cols.index("Tractor")
-            unit_id_col = all_cols[tractor_idx + 1]
+            # Standardize for Join (Direct Match)
+            df_master['patente'] = df_master['patente'].astype(str).str.upper().str.strip()
+            df_report[unit_col] = df_report[unit_col].astype(str).str.upper().str.strip()
 
-            # Data type sanitization
-            clean_df["Fecha"] = pd.to_datetime(clean_df["Fecha"], dayfirst=True, errors='coerce')
-            clean_df = clean_df.dropna(subset=["Fecha"])
-            clean_df["Precio Cliente"] = pd.to_numeric(clean_df["Precio Cliente"], errors='coerce').fillna(0)
-            clean_df["Distancia total"] = pd.to_numeric(clean_df["Distancia total"], errors='coerce').fillna(0)
+            # INNER JOIN
+            combined_df = pd.merge(
+                df_report, 
+                df_master[['patente', 'negocio principal']], 
+                left_on=unit_col, 
+                right_on='patente', 
+                how='inner'
+            )
+
+            # Data Cleaning & Type Conversion
+            combined_df["Fecha"] = pd.to_datetime(combined_df["Fecha"], dayfirst=True, errors='coerce')
+            combined_df = combined_df.dropna(subset=["Fecha"])
+            combined_df["Precio Cliente"] = pd.to_numeric(combined_df["Precio Cliente"], errors='coerce').fillna(0)
+            combined_df["Distancia total"] = pd.to_numeric(combined_df["Distancia total"], errors='coerce').fillna(0)
+            combined_df["Month_Period"] = combined_df["Fecha"].dt.to_period("M").astype(str)
             
-            # Create Period column for filtering
-            clean_df["Month_Period"] = clean_df["Fecha"].dt.to_period("M").astype(str)
-            
-            return clean_df, unit_id_col
+            return combined_df, unit_col
         except Exception as e:
-            return f"error_critical: {str(e)}", None
+            return f"error: {str(e)}", None
 
-    # 3. FILE UPLOADER
-    uploaded_file = st.file_uploader("Sube el reporte tarifario (.xlsx)", type=["xlsx"])
+    # 3. MAIN INTERFACE
+    st.title("📊 Monitor de KPIs de Unidades")
+    
+    with st.expander("📂 Carga de Archivos", expanded=True):
+        col_up1, col_up2 = st.columns(2)
+        with col_up1:
+            up_report = st.file_uploader("1. Reporte Tarifario", type=["xlsx"])
+        with col_up2:
+            up_master = st.file_uploader("2. Afectación", type=["xlsx"])
 
-    if uploaded_file:
-        processing_result, UNIT_COL = process_data(uploaded_file)
+    if up_report and up_master:
+        result, UNIT_COL = process_full_data(up_report, up_master)
 
-        if isinstance(processing_result, str) and "error" in processing_result:
-            st.error(f"⚠️ {processing_result}")
+        if isinstance(result, str) and "error" in result:
+            st.error(f"⚠️ {result}")
         else:
-            df = processing_result
+            df = result
 
-            # --- SIDEBAR CONFIGURATION ---
             with st.sidebar:
-                st.header("Configuración")
-                business_unit_sel = st.selectbox("Unidad de Negocios", sorted(df["Unidad de negocios"].unique()))
-                month_sel = st.selectbox("Mes de Análisis", sorted(df["Month_Period"].unique(), reverse=True))
+                st.header("⚙️ Panel de Control")
+                month_opts = sorted(df["Month_Period"].unique(), reverse=True)
+                sel_month = st.selectbox("📅 Mes de Análisis", month_opts)
+                
+                st.divider()
+                bu_opts = sorted(df["negocio principal"].unique())
+                st.write("**🏢 Negocios de Afectación**")
+                sel_bus = st.pills("Filtra por afectación:", options=bu_opts, selection_mode="multi", default=bu_opts)
 
-            # --- DATA FILTERING AND KPI CALCULATIONS ---
-            filtered_df = df[(df["Unidad de negocios"] == business_unit_sel) & (df["Month_Period"] == month_sel)].copy()
-            
-            if filtered_df.empty:
-                st.warning("No hay datos para esta selección.")
+            if not sel_bus:
+                st.warning("Selecciona al menos un negocio.")
             else:
-                last_report_date = filtered_df["Fecha"].max()
+                df_filtered = df[(df["negocio principal"].isin(sel_bus)) & (df["Month_Period"] == sel_month)].copy()
                 
-                # Aggregation by Unit
-                summary_df = filtered_df.groupby(UNIT_COL).agg({
-                    'Viaje': 'count', 
-                    'Precio Cliente': 'sum', 
-                    'Distancia total': 'sum', 
-                    'Fecha': 'max'
+                last_report_date = df_filtered["Fecha"].max()
+                summary = df_filtered.groupby(UNIT_COL).agg({
+                    'Viaje': 'count', 'Precio Cliente': 'sum', 'Distancia total': 'sum', 'Fecha': 'max'
                 }).reset_index()
-                
-                # Productivity calculation (Inactivity days)
-                summary_df["Inactivity_Days"] = (last_report_date - summary_df["Fecha"]).dt.days
-                
-                # Rename for final Spanish UI headers
-                summary_df.columns = [UNIT_COL, "Viajes", "Facturacion", "KM_Totales", "Ult_Viaje", "Dias_Inactivos"]
+                summary["Inactividad"] = (last_report_date - summary["Fecha"]).dt.days
+                summary.columns = [UNIT_COL, "Viajes", "Facturacion", "KM", "Ult_Viaje", "Inactividad"]
 
-                # --- 4. MONTHLY SUMMARY (Spanish UI) ---
-                st.subheader(f"📍 Resumen Mensual: {business_unit_sel} ({month_sel})")
-                with st.container(border=True):
-                    m1, m2, m3, m4 = st.columns(4)
-                    m1.metric("Facturación Total Mes", f"$ {filtered_df['Precio Cliente'].sum():,.0f}")
-                    m2.metric("Total Viajes Realizados", f"{len(filtered_df):,}")
-                    m3.metric("Unidades Activas", len(summary_df))
-                    m4.metric("Promedio Fact. p/Unidad", f"$ {summary_df['Facturacion'].mean():,.0f}")
-
-                # --- 5. DISTRIBUTION CHARTS ---
                 st.divider()
-                st.subheader("📊 Distribución")
-                
-                # Category binning for charts
-                summary_df['Trips_Cat'] = summary_df['Viajes'].apply(lambda x: '< 3' if x < 3 else ('> 5' if x > 5 else '3-5'))
-                summary_df['Rev_Cat'] = summary_df['Facturacion'].apply(lambda x: '< $4M' if x < 4000000 else '>= $4M')
-                summary_df['KM_Cat'] = summary_df['KM_Totales'].apply(lambda x: '< 5k' if x < 5000 else ('> 8k' if x > 8000 else '5k-8k'))
+                tab_summary, tab_details = st.tabs(["📉 Resumen Ejecutivo", "🔍 Detalle y Auditoría"])
 
-                g1, g2, g3 = st.columns(3)
-                with g1:
-                    st.write("**Unidades por Rango de Viajes**")
-                    st.bar_chart(summary_df['Trips_Cat'].value_counts(), color="#2F75B5")
-                with g2:
-                    st.write("**Unidades por Rango de Facturación**")
-                    st.bar_chart(summary_df['Rev_Cat'].value_counts(), color="#27AE60")
-                with g3:
-                    st.write("**Unidades por Rango de KM**")
-                    st.bar_chart(summary_df['KM_Cat'].value_counts(), color="#F1C40F")
+                with tab_summary:
+                    st.subheader(f"📍 Resumen: {', '.join(sel_bus)}")
+                    with st.container(border=True):
+                        m1, m2, m3, m4 = st.columns(4)
+                        m1.metric("Facturación Total", f"$ {df_filtered['Precio Cliente'].sum():,.0f}")
+                        m2.metric("Total Viajes", f"{len(df_filtered):,}")
+                        m3.metric("Unidades Activas", len(summary))
+                        m4.metric("Inactividad > 7d", len(summary[summary["Inactividad"] > 7]), delta_color="inverse")
+                    
+                    st.write("### Distribución de Cumplimiento")
+                    summary['Cat_Viajes'] = summary['Viajes'].apply(lambda x: '< 3' if x < 3 else ('> 5' if x > 5 else '3-5'))
+                    summary['Cat_Fact'] = summary['Facturacion'].apply(lambda x: '< $4M' if x < 4000000 else '>= $4M')
+                    summary['Cat_KM'] = summary['KM'].apply(lambda x: '< 5k' if x < 5000 else ('> 8k' if x > 8000 else '5k-8k'))
+                    
+                    g1, g2, g3 = st.columns(3)
+                    with g1:
+                        st.write("**Rango de Viajes**")
+                        st.bar_chart(summary['Cat_Viajes'].value_counts(), color="#2F75B5")
+                    with g2:
+                        st.write("**Rango de Facturación**")
+                        st.bar_chart(summary['Cat_Fact'].value_counts(), color="#27AE60")
+                    with g3:
+                        st.write("**Rango de Kilometraje**")
+                        st.bar_chart(summary['Cat_KM'].value_counts(), color="#FF9800")
 
-                # --- 6. DETAILED TABLE WITH CONDITIONAL STYLING (Spanish Headers) ---
-                st.divider()
-                st.write("### 🔍 Detalle por Unidad")
-                
-                def apply_table_styles(df_to_style):
-                    styler = df_to_style.style.format({"Facturacion": "$ {:,.2f}", "KM_Totales": "{:,.2f} km"})
-                    
-                    # Trips Style (Text Color)
-                    styler = styler.map(lambda v: 'color: #E74C3C; font-weight: bold' if v < 3 else ('color: #27AE60; font-weight: bold' if v > 5 else 'color: #F1C40F; font-weight: bold'), subset=['Viajes'])
-                    
-                    # Revenue Style (Background Color)
-                    styler = styler.map(lambda f: 'background-color: rgba(231, 76, 60, 0.15); color: #E74C3C' if f < 4000000 else 'background-color: rgba(39, 174, 96, 0.15); color: #27AE60', subset=['Facturacion'])
-                    
-                    # KM Style (Text Color)
-                    styler = styler.map(lambda k: 'color: #E74C3C; font-weight: bold' if k < 5000 else ('color: #27AE60; font-weight: bold' if k > 8000 else ''), subset=['KM_Totales'])
-                    
-                    # Inactivity Style (Text Color)
-                    styler = styler.map(lambda d: 'color: #E74C3C; font-weight: bold' if d > 7 else '', subset=['Dias_Inactivos'])
-                    
-                    return styler
+                with tab_details:
+                    st.write("### 🚩 Semáforo de Desempeño por Unidad")
+                    search_q = st.text_input("🔍 Buscar patente...", "").upper()
+                    table_df = summary.copy()
+                    if search_q:
+                        table_df = table_df[table_df[UNIT_COL].str.contains(search_q)]
 
-                # Display final styled table
-                st.dataframe(
-                    apply_table_styles(summary_df[[UNIT_COL, "Viajes", "Facturacion", "KM_Totales", "Dias_Inactivos"]]),
-                    use_container_width=True, hide_index=True
-                )
+                    def style_table(df_styled):
+                        s = df_styled.style.format({"Facturacion": "$ {:,.2f}", "KM": "{:,.2f} km"})
+                        s = s.map(lambda v: 'color: #E74C3C; font-weight: bold' if v < 3 else ('color: #27AE60; font-weight: bold' if v > 5 else 'color: #F1C40F; font-weight: bold'), subset=['Viajes'])
+                        s = s.map(lambda f: 'background-color: rgba(231, 76, 60, 0.15); color: #E74C3C' if f < 4000000 else 'background-color: rgba(39, 174, 96, 0.15); color: #27AE60', subset=['Facturacion'])
+                        s = s.map(lambda k: 'color: #E74C3C; font-weight: bold' if k < 5000 else ('color: #27AE60; font-weight: bold' if k > 8000 else ''), subset=['KM'])
+                        s = s.map(lambda d: 'color: #E74C3C; font-weight: bold' if d > 7 else '', subset=['Inactividad'])
+                        return s
 
-                # --- 7. EXCEL EXPORT ---
-                export_buffer = io.BytesIO()
-                with pd.ExcelWriter(export_buffer, engine='openpyxl') as writer:
-                    summary_df.drop(columns=['Trips_Cat', 'Rev_Cat', 'KM_Cat']).to_excel(writer, index=False)
-                st.download_button("📥 Descargar Reporte Validado", export_buffer.getvalue(), f"KPI_{business_unit_sel}.xlsx")
+                    st.dataframe(style_table(table_df[[UNIT_COL, "Viajes", "Facturacion", "KM", "Inactividad"]]), use_container_width=True, hide_index=True)
 
-    else:
-        st.info("👋 Sube el archivo .xlsx para generar el Monitor de KPIs.")
+                    st.divider()
+                    st.write("### 🔎 Auditoría: Desglose Individual de Viajes")
+                    selected_unit = st.selectbox("Unidad a auditar:", options=summary[UNIT_COL].unique())
+
+                    if selected_unit:
+                        trips_detail = df_filtered[df_filtered[UNIT_COL] == selected_unit].copy()
+                        audit_cols = ["Fecha", "Precio Cliente", "Distancia total", "Dador", "Chofer", "Origen", "Destino"]
+                        st.dataframe(trips_detail[audit_cols].style.format({"Precio Cliente": "$ {:,.2f}", "Distancia total": "{:,.2f} km", "Fecha": "{:%d/%m/%Y}"}), use_container_width=True, hide_index=True)
+
+                    # EXPORT LOGIC
+                    st.divider()
+                    output = io.BytesIO()
+                    with pd.ExcelWriter(output, engine='openpyxl') as writer:
+                        # Pestaña 1: Resumen General
+                        summary.to_excel(writer, index=False, sheet_name='Resumen_General')
+                        # Pestaña 2: Auditoría de la unidad seleccionada
+                        if selected_unit:
+                            trips_detail[audit_cols].to_excel(writer, index=False, sheet_name=f'Auditoria_{selected_unit}')
+                    
+                    st.download_button(
+                        label="📥 Descargar Reporte y Auditoría (Excel)", 
+                        data=output.getvalue(), 
+                        file_name=f"KPI_Completo_{sel_month}.xlsx",
+                        mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
+                    )
+else:
+    st.info("👋 Por favor, sube ambos archivos para iniciar el análisis.")
