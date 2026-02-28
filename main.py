@@ -66,7 +66,7 @@ if check_password():
             combined_df["Fecha"] = pd.to_datetime(combined_df["Fecha"], dayfirst=True, errors='coerce')
             combined_df = combined_df.dropna(subset=["Fecha"])
             combined_df["Precio Cliente"] = pd.to_numeric(combined_df["Precio Cliente"], errors='coerce').fillna(0)
-            combined_df["Distancia total"] = pd.to_numeric(combined_df["Distancia total"], errors='coerce').fillna(0)
+            combined_df["Distancia estimada"] = pd.to_numeric(combined_df["Distancia estimada"], errors='coerce').fillna(0)
             combined_df["Month_Period"] = combined_df["Fecha"].dt.to_period("M").astype(str)
             
             return combined_df, unit_col
@@ -108,7 +108,7 @@ if check_password():
                 
                 last_report_date = df_filtered["Fecha"].max()
                 summary = df_filtered.groupby(UNIT_COL).agg({
-                    'Viaje': 'count', 'Precio Cliente': 'sum', 'Distancia total': 'sum', 'Fecha': 'max'
+                    'Viaje': 'count', 'Precio Cliente': 'sum', 'Distancia estimada': 'sum', 'Fecha': 'max'
                 }).reset_index()
                 summary["Inactividad"] = (last_report_date - summary["Fecha"]).dt.days
                 summary.columns = [UNIT_COL, "Viajes", "Facturacion", "KM", "Ult_Viaje", "Inactividad"]
@@ -164,8 +164,8 @@ if check_password():
 
                     if selected_unit:
                         trips_detail = df_filtered[df_filtered[UNIT_COL] == selected_unit].copy()
-                        audit_cols = ["Fecha", "Precio Cliente", "Distancia total", "Dador", "Chofer", "Origen", "Destino"]
-                        st.dataframe(trips_detail[audit_cols].style.format({"Precio Cliente": "$ {:,.2f}", "Distancia total": "{:,.2f} km", "Fecha": "{:%d/%m/%Y}"}), use_container_width=True, hide_index=True)
+                        audit_cols = ["Fecha", "Precio Cliente", "Distancia estimada", "Dador", "Chofer", "Origen", "Destino"]
+                        st.dataframe(trips_detail[audit_cols].style.format({"Precio Cliente": "$ {:,.2f}", "Distancia estimada": "{:,.2f} km", "Fecha": "{:%d/%m/%Y}"}), use_container_width=True, hide_index=True)
 
                     # EXPORT LOGIC
                     st.divider()
