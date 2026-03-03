@@ -9,33 +9,26 @@ st.set_page_config(page_title="Monitor KPIs - Dashboard Operativo", layout="wide
 def check_password():
     """Returns True if the user had the correct password."""
     def password_entered():
-        """Checks whether a password entered by the user is correct."""
         if st.session_state["password"] == st.secrets["password"]:
             st.session_state["password_correct"] = True
-            del st.session_state["password"]  # don't store password
+            del st.session_state["password"]
         else:
             st.session_state["password_correct"] = False
 
     if "password_correct" not in st.session_state:
-        # First run, show input for password.
         st.text_input("Introduce la contraseña de acceso", type="password", on_change=password_entered, key="password")
         return False
     elif not st.session_state["password_correct"]:
-        # Password not correct, show input + error.
         st.text_input("Introduce la contraseña de acceso", type="password", on_change=password_entered, key="password")
         st.error("😕 Contraseña incorrecta")
         return False
     else:
-        # Password correct.
         return True
     
 if check_password():
-    # 2. DATA PROCESSING ENGINE (INTERNAL LOGIC IN ENGLISH)
+    # 2. DATA PROCESSING ENGINE
     @st.cache_data
     def process_full_data(report_file, master_file):
-        """
-        Handles asymmetric headers: Master (Row 1) | Report (Row 2)
-        """
         try:
             # Master: Row 1 (header=0) | Report: Row 2 (header=1)
             df_master = pd.read_excel(master_file, header=0)
@@ -104,14 +97,16 @@ if check_password():
             if not sel_bus:
                 st.warning("Selecciona al menos un negocio.")
             else:
+                # Filter data based on selections
                 df_filtered = df[(df["negocio principal"].isin(sel_bus)) & (df["Month_Period"] == sel_month)].copy()
                 
+                # Summary Table with Inactivity Calculation
                 last_report_date = df_filtered["Fecha"].max()
                 summary = df_filtered.groupby(UNIT_COL).agg({
                     'Viaje': 'count', 'Precio Cliente': 'sum', 'Distancia estimada': 'sum', 'Fecha': 'max'
                 }).reset_index()
                 summary["Inactividad"] = (last_report_date - summary["Fecha"]).dt.days
-                summary.columns = [UNIT_COL, "Viajes", "Facturacion", "KM", "Ult_Viaje", "Inactividad"]
+                summary.columns = ["Tipo", "Viajes", "Facturación", "KM", "Ult_Viaje", "Inactividad"]
 
                 st.divider()
                 tab_summary, tab_details = st.tabs(["📉 Resumen Ejecutivo", "🔍 Detalle y Auditoría"])
@@ -127,7 +122,7 @@ if check_password():
                     
                     st.write("### Distribución de Cumplimiento")
                     summary['Cat_Viajes'] = summary['Viajes'].apply(lambda x: '< 3' if x < 3 else ('> 5' if x > 5 else '3-5'))
-                    summary['Cat_Fact'] = summary['Facturacion'].apply(lambda x: '< $4M' if x < 4000000 else '>= $4M')
+                    summary['Cat_Fact'] = summary['Facturación'].apply(lambda x: '< $4M' if x < 4000000 else '>= $4M')
                     summary['Cat_KM'] = summary['KM'].apply(lambda x: '< 5k' if x < 5000 else ('> 8k' if x > 8000 else '5k-8k'))
                     
                     g1, g2, g3 = st.columns(3)
@@ -144,44 +139,52 @@ if check_password():
                 with tab_details:
                     st.write("### 🚩 Semáforo de Desempeño por Unidad")
                     search_q = st.text_input("🔍 Buscar patente...", "").upper()
-                    table_df = summary.copy()
+                    summary_view = summary[["Tipo", "Viajes", "Facturación", "KM", "Inactividad"]].copy()
+                    
                     if search_q:
-                        table_df = table_df[table_df[UNIT_COL].str.contains(search_q)]
+                        # Reset index fundamental para evitar el ValueError en la comparación
+                        summary_view = summary_view[summary_view["Tipo"].str.contains(search_q)].reset_index(drop=True)
 
                     def style_table(df_styled):
-                        s = df_styled.style.format({"Facturacion": "$ {:,.2f}", "KM": "{:,.2f} km"})
+                        s = df_styled.style.format({"Facturación": "$ {:,.2f}", "KM": "{:,.2f} km"})
                         s = s.map(lambda v: 'color: #E74C3C; font-weight: bold' if v < 3 else ('color: #27AE60; font-weight: bold' if v > 5 else 'color: #F1C40F; font-weight: bold'), subset=['Viajes'])
-                        s = s.map(lambda f: 'background-color: rgba(231, 76, 60, 0.15); color: #E74C3C' if f < 4000000 else 'background-color: rgba(39, 174, 96, 0.15); color: #27AE60', subset=['Facturacion'])
+                        s = s.map(lambda f: 'background-color: rgba(231, 76, 60, 0.15); color: #E74C3C' if f < 4000000 else 'background-color: rgba(39, 174, 96, 0.15); color: #27AE60', subset=['Facturación'])
                         s = s.map(lambda k: 'color: #E74C3C; font-weight: bold' if k < 5000 else ('color: #27AE60; font-weight: bold' if k > 8000 else ''), subset=['KM'])
                         s = s.map(lambda d: 'color: #E74C3C; font-weight: bold' if d > 7 else '', subset=['Inactividad'])
                         return s
 
-                    st.dataframe(style_table(table_df[[UNIT_COL, "Viajes", "Facturacion", "KM", "Inactividad"]]), use_container_width=True, hide_index=True)
-
-                    st.divider()
-                    st.write("### 🔎 Auditoría: Desglose Individual de Viajes")
-                    selected_unit = st.selectbox("Unidad a auditar:", options=summary[UNIT_COL].unique())
-
-                    if selected_unit:
-                        trips_detail = df_filtered[df_filtered[UNIT_COL] == selected_unit].copy()
-                        audit_cols = ["Fecha", "Precio Cliente", "Distancia estimada", "Dador", "Chofer", "Origen", "Destino"]
-                        st.dataframe(trips_detail[audit_cols].style.format({"Precio Cliente": "$ {:,.2f}", "Distancia estimada": "{:,.2f} km", "Fecha": "{:%d/%m/%Y}"}), use_container_width=True, hide_index=True)
-
-                    # EXPORT LOGIC
-                    st.divider()
-                    output = io.BytesIO()
-                    with pd.ExcelWriter(output, engine='openpyxl') as writer:
-                        # Pestaña 1: Resumen General
-                        summary.to_excel(writer, index=False, sheet_name='Resumen_General')
-                        # Pestaña 2: Auditoría de la unidad seleccionada
-                        if selected_unit:
-                            trips_detail[audit_cols].to_excel(writer, index=False, sheet_name=f'Auditoria_{selected_unit}')
-                    
-                    st.download_button(
-                        label="📥 Descargar Reporte y Auditoría (Excel)", 
-                        data=output.getvalue(), 
-                        file_name=f"KPI_Completo_{sel_month}.xlsx",
-                        mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
+                    # Table with Selection Event
+                    selection_event = st.dataframe(
+                        style_table(summary_view),
+                        use_container_width=True,
+                        hide_index=True,
+                        selection_mode="single-row",
+                        on_select="rerun"
                     )
-else:
-    st.info("👋 Por favor, sube ambos archivos para iniciar el análisis.")
+
+                    # Logic for Auditing Details based on Selection
+                    selected_rows = selection_event.selection.rows
+                    if selected_rows:
+                        # obtain the index of the selected row to filter the details table
+                        idx = selected_rows[0] if isinstance(selected_rows, list) else selected_rows
+                        patente_sel = summary_view.iloc[idx]["Tipo"]
+                        
+                        st.divider()
+                        st.subheader(f"🔍 Auditoría: Desglose Individual de Viajes - {patente_sel}")
+                        
+                        # filter the original detailed dataframe based on the selected unit to show the relevant trips for auditing
+                        df_auditoria = df_filtered[df_filtered[UNIT_COL] == patente_sel].copy()
+                        cols_auditoria = ["Fecha", "Precio Cliente", "Distancia estimada", "Dador", "Chofer", "Origen"]
+                        
+                        st.dataframe(
+                            df_auditoria[cols_auditoria],
+                            use_container_width=True,
+                            hide_index=True,
+                            column_config={
+                                "Precio Cliente": st.column_config.NumberColumn(format="$ %.2f"),
+                                "Distancia estimada": st.column_config.NumberColumn(format="%.1f km"),
+                                "Fecha": st.column_config.DateColumn(format="DD/MM/YYYY")
+                            }
+                        )
+                    else:
+                        st.info("👆 Selecciona una patente en la tabla superior para auditar sus viajes.")
