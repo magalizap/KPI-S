@@ -6,6 +6,16 @@ from datetime import datetime
 # 1. PAGE & ACCESS CONFIGURATION
 st.set_page_config(page_title="Monitor KPIs - Dashboard Operativo", layout="wide")
 
+# 2. CONFIGURATION CONSTANTS
+TRIP_THRESHOLDS = {"low": 3, "high": 5}
+BILLING_THRESHOLD = 4_000_000
+KM_THRESHOLDS = {"low": 5000, "high": 8000}
+INACTIVITY_THRESHOLD = 7
+REQUIRED_COLUMNS = {
+    "master": ["patente", "negocio principal"],
+    "report": ["Tractor", "Fecha", "Precio Cliente", "Distancia estimada"]
+}
+
 def check_password():
     """Returns True if the user had the correct password."""
     def password_entered():
@@ -24,23 +34,50 @@ def check_password():
         return False
     else:
         return True
-    
+
 if check_password():
-    # 2. DATA PROCESSING ENGINE
+    # 3. VALIDATION FUNCTIONS
+    def validate_dataframe(df, required_cols, file_type):
+        """Validates that dataframe contains required columns."""
+        df_cols_lower = df.columns.str.lower().str.strip()
+        missing = [col for col in required_cols if col.lower() not in df_cols_lower]
+        if missing:
+            return False, f"Faltan columnas en {file_type}: {', '.join(missing)}"
+        return True, None
+
+    def get_unit_column(df_report):
+        """Safely gets the unit column (column after 'Tractor')."""
+        try:
+            report_cols = list(df_report.columns)
+            tractor_idx = report_cols.index("Tractor")
+            return report_cols[tractor_idx + 1]
+        except (ValueError, IndexError):
+            return None
+
+    # 4. DATA PROCESSING ENGINE
     @st.cache_data
     def process_full_data(report_file, master_file):
         try:
             # Master: Row 1 (header=0) | Report: Row 2 (header=1)
             df_master = pd.read_excel(master_file, header=0)
             df_master.columns = df_master.columns.str.lower().str.strip()
-            
+
             df_report = pd.read_excel(report_file, header=1)
             df_report = df_report.loc[:, ~df_report.columns.astype(str).str.contains("Unnamed")].dropna(axis=1, how="all")
-            
+
+            # Validate required columns
+            is_valid, error_msg = validate_dataframe(df_master, REQUIRED_COLUMNS["master"], "Afectación")
+            if not is_valid:
+                return error_msg, None
+
+            is_valid, error_msg = validate_dataframe(df_report, REQUIRED_COLUMNS["report"], "Reporte")
+            if not is_valid:
+                return error_msg, None
+
             # Unit ID Logic (Tractor + 1)
-            report_cols = list(df_report.columns)
-            tractor_idx = report_cols.index("Tractor")
-            unit_col = report_cols[tractor_idx + 1]
+            unit_col = get_unit_column(df_report)
+            if not unit_col:
+                return "No se encontró la columna de unidad después de 'Tractor'", None
 
             # Standardize for Join (Direct Match)
             df_master['patente'] = df_master['patente'].astype(str).str.upper().str.strip()
@@ -48,25 +85,84 @@ if check_password():
 
             # INNER JOIN
             combined_df = pd.merge(
-                df_report, 
-                df_master[['patente', 'negocio principal']], 
-                left_on=unit_col, 
-                right_on='patente', 
+                df_report,
+                df_master[['patente', 'negocio principal']],
+                left_on=unit_col,
+                right_on='patente',
                 how='inner'
             )
+
+            if combined_df.empty:
+                return "No se encontraron coincidencias entre Reporte y Afectación", None
 
             # Data Cleaning & Type Conversion
             combined_df["Fecha"] = pd.to_datetime(combined_df["Fecha"], dayfirst=True, errors='coerce')
             combined_df = combined_df.dropna(subset=["Fecha"])
+
+            if combined_df.empty:
+                return "No hay datos válidos después de limpiar fechas", None
+
             combined_df["Precio Cliente"] = pd.to_numeric(combined_df["Precio Cliente"], errors='coerce').fillna(0)
             combined_df["Distancia estimada"] = pd.to_numeric(combined_df["Distancia estimada"], errors='coerce').fillna(0)
             combined_df["Month_Period"] = combined_df["Fecha"].dt.to_period("M").astype(str)
-            
+
             return combined_df, unit_col
         except Exception as e:
-            return f"error: {str(e)}", None
+            return f"Error en procesamiento de datos: {str(e)}", None
 
-    # 3. MAIN INTERFACE
+    # 5. CATEGORIZATION FUNCTIONS
+    def categorize_trips(value):
+        """Categorize trips count."""
+        if value < TRIP_THRESHOLDS["low"]:
+            return "< 3"
+        elif value > TRIP_THRESHOLDS["high"]:
+            return "> 5"
+        else:
+            return "3-5"
+
+    def categorize_billing(value):
+        """Categorize billing amount."""
+        return ">= $4M" if value >= BILLING_THRESHOLD else "< $4M"
+
+    def categorize_km(value):
+        """Categorize kilometer distance."""
+        if value < KM_THRESHOLDS["low"]:
+            return "< 5k"
+        elif value > KM_THRESHOLDS["high"]:
+            return "> 8k"
+        else:
+            return "5k-8k"
+
+    def get_trip_style(value):
+        """Style function for trips column."""
+        if value < TRIP_THRESHOLDS["low"]:
+            return 'color: #E74C3C; font-weight: bold'
+        elif value > TRIP_THRESHOLDS["high"]:
+            return 'color: #27AE60; font-weight: bold'
+        else:
+            return 'color: #F1C40F; font-weight: bold'
+
+    def get_billing_style(value):
+        """Style function for billing column."""
+        if value < BILLING_THRESHOLD:
+            return 'background-color: rgba(231, 76, 60, 0.15); color: #E74C3C'
+        else:
+            return 'background-color: rgba(39, 174, 96, 0.15); color: #27AE60'
+
+    def get_km_style(value):
+        """Style function for KM column."""
+        if value < KM_THRESHOLDS["low"]:
+            return 'color: #E74C3C; font-weight: bold'
+        elif value > KM_THRESHOLDS["high"]:
+            return 'color: #27AE60; font-weight: bold'
+        else:
+            return ''
+
+    def get_inactivity_style(value):
+        """Style function for inactivity column."""
+        return 'color: #E74C3C; font-weight: bold' if value > INACTIVITY_THRESHOLD else ''
+
+    # 6. MAIN INTERFACE
     st.title("📊 Monitor de KPIs de Unidades")
     
     with st.expander("📂 Carga de Archivos", expanded=True):
@@ -79,7 +175,7 @@ if check_password():
     if up_report and up_master:
         result, UNIT_COL = process_full_data(up_report, up_master)
 
-        if isinstance(result, str) and "error" in result:
+        if isinstance(result, str):
             st.error(f"⚠️ {result}")
         else:
             df = result
@@ -88,7 +184,7 @@ if check_password():
                 st.header("⚙️ Panel de Control")
                 month_opts = sorted(df["Month_Period"].unique(), reverse=True)
                 sel_month = st.selectbox("📅 Mes de Análisis", month_opts)
-                
+
                 st.divider()
                 bu_opts = sorted(df["negocio principal"].unique())
                 st.write("**🏢 Negocios de Afectación**")
@@ -99,7 +195,7 @@ if check_password():
             else:
                 # Filter data based on selections
                 df_filtered = df[(df["negocio principal"].isin(sel_bus)) & (df["Month_Period"] == sel_month)].copy()
-                
+
                 # Summary Table with Inactivity Calculation
                 last_report_date = df_filtered["Fecha"].max()
                 summary = df_filtered.groupby(UNIT_COL).agg({
@@ -118,12 +214,12 @@ if check_password():
                         m1.metric("Facturación Total", f"$ {df_filtered['Precio Cliente'].sum():,.0f}")
                         m2.metric("Total Viajes", f"{len(df_filtered):,}")
                         m3.metric("Unidades Activas", len(summary))
-                        m4.metric("Inactividad > 7d", len(summary[summary["Inactividad"] > 7]), delta_color="inverse")
-                    
+                        m4.metric("Inactividad > 7d", len(summary[summary["Inactividad"] > INACTIVITY_THRESHOLD]), delta_color="inverse")
+
                     st.write("### Distribución de Cumplimiento")
-                    summary['Cat_Viajes'] = summary['Viajes'].apply(lambda x: '< 3' if x < 3 else ('> 5' if x > 5 else '3-5'))
-                    summary['Cat_Fact'] = summary['Facturación'].apply(lambda x: '< $4M' if x < 4000000 else '>= $4M')
-                    summary['Cat_KM'] = summary['KM'].apply(lambda x: '< 5k' if x < 5000 else ('> 8k' if x > 8000 else '5k-8k'))
+                    summary['Cat_Viajes'] = summary['Viajes'].apply(categorize_trips)
+                    summary['Cat_Fact'] = summary['Facturación'].apply(categorize_billing)
+                    summary['Cat_KM'] = summary['KM'].apply(categorize_km)
                     
                     g1, g2, g3 = st.columns(3)
                     with g1:
@@ -140,17 +236,17 @@ if check_password():
                     st.write("### 🚩 Semáforo de Desempeño por Unidad")
                     search_q = st.text_input("🔍 Buscar patente...", "").upper()
                     summary_view = summary[["Tipo", "Viajes", "Facturación", "KM", "Inactividad"]].copy()
-                    
+
                     if search_q:
-                        # Reset index fundamental para evitar el ValueError en la comparación
                         summary_view = summary_view[summary_view["Tipo"].str.contains(search_q)].reset_index(drop=True)
 
                     def style_table(df_styled):
+                        """Apply conditional styling to the performance table."""
                         s = df_styled.style.format({"Facturación": "$ {:,.2f}", "KM": "{:,.2f} km"})
-                        s = s.map(lambda v: 'color: #E74C3C; font-weight: bold' if v < 3 else ('color: #27AE60; font-weight: bold' if v > 5 else 'color: #F1C40F; font-weight: bold'), subset=['Viajes'])
-                        s = s.map(lambda f: 'background-color: rgba(231, 76, 60, 0.15); color: #E74C3C' if f < 4000000 else 'background-color: rgba(39, 174, 96, 0.15); color: #27AE60', subset=['Facturación'])
-                        s = s.map(lambda k: 'color: #E74C3C; font-weight: bold' if k < 5000 else ('color: #27AE60; font-weight: bold' if k > 8000 else ''), subset=['KM'])
-                        s = s.map(lambda d: 'color: #E74C3C; font-weight: bold' if d > 7 else '', subset=['Inactividad'])
+                        s = s.map(get_trip_style, subset=['Viajes'])
+                        s = s.map(get_billing_style, subset=['Facturación'])
+                        s = s.map(get_km_style, subset=['KM'])
+                        s = s.map(get_inactivity_style, subset=['Inactividad'])
                         return s
 
                     # Table with Selection Event
@@ -165,17 +261,15 @@ if check_password():
                     # Logic for Auditing Details based on Selection
                     selected_rows = selection_event.selection.rows
                     if selected_rows:
-                        # obtain the index of the selected row to filter the details table
                         idx = selected_rows[0] if isinstance(selected_rows, list) else selected_rows
                         patente_sel = summary_view.iloc[idx]["Tipo"]
-                        
+
                         st.divider()
                         st.subheader(f"🔍 Auditoría: Desglose Individual de Viajes - {patente_sel}")
-                        
-                        # filter the original detailed dataframe based on the selected unit to show the relevant trips for auditing
+
                         df_auditoria = df_filtered[df_filtered[UNIT_COL] == patente_sel].copy()
                         cols_auditoria = ["Fecha", "Precio Cliente", "Distancia estimada", "Dador", "Chofer", "Origen"]
-                        
+
                         st.dataframe(
                             df_auditoria[cols_auditoria],
                             use_container_width=True,
