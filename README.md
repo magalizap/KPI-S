@@ -1,34 +1,52 @@
-# 🚚 Monitor de KPIs de Unidades - Transporte GBA
+# Monitor de KPIs de Unidades - Transporte GBA
 
 ![Streamlit App](https://static.streamlit.io)
 
-Esta aplicación interactiva permite automatizar la validación de indicadores clave de desempeño (KPIs) para la flota de transporte. Procesa reportes tarifarios en formato `.xlsx` y genera un tablero de control visual con alertas automáticas.
+Dashboard interactivo para validar indicadores clave de desempeño (KPIs) de la flota de transporte. Se conecta a la API de NBCargo para obtener datos de viajes y los cruza con la afectación de unidades.
 
-## 📋 Funcionalidades principales
+## Flujo de Uso
 
-El monitor realiza cuatro validaciones críticas por cada unidad:
+1. **Autenticación:** Ingresá tu usuario y contraseña de API.
+2. **Configuración de fechas:** Seleccioná el rango de consulta desde el panel lateral.
+3. **Afectación:** La планilla de afectación se descarga automáticamente desde la URL configurada. Podés cambiarla desde el expander "📦 Afectación".
+4. **Dashboard:**
+   - Revisá las **Métricas Maestras** (facturación, viajes, unidades activas, inactividad).
+   - Analizá los **Gráficos de Distribución** por rango de viajes, facturación y kilometraje.
+   - Consultá la **Tabla Semáforo** y hacé clic en una patente para ver el desglose individual de viajes.
 
-1.  **Validación de Viajes:** Identifica unidades con baja productividad (<3 viajes) o exceso de operación (>5 viajes).
-2.  **Validación de Facturación:** Control de ingresos por unidad con un umbral objetivo de **$4.000.000**.
-3.  **Análisis de Kilometraje:** Seguimiento de distancias totales (Alertas en <5.000 km y >8.000 km).
-4.  **Control de Productividad:** Cálculo automático de días de inactividad desde el último servicio registrado.
+## Validaciones de KPI
 
-## 🚀 Guía de Uso
+| KPI         | Umbral bajo         | Umbral alto        |
+| ----------- | ------------------- | ------------------ |
+| Viajes      | < 3 (rojo)          | > 5 (verde)        |
+| Facturación | < $4.000.000 (rojo) | >= $4M (verde)     |
+| Kilometraje | < 5.000 km (rojo)   | > 8.000 km (verde) |
+| Inactividad | > 7 días (rojo)     | —                  |
 
-1.  **Carga de datos:** Sube el archivo `.xlsx` exportado del sistema.
-2.  **Filtros:** Selecciona la **Unidad de Negocio** y el **Mes** desde la barra lateral.
-3.  **Visualización:**
-    - Revisa las **Métricas Maestras** en la parte superior.
-    - Analiza los **Gráficos de Distribución** para ver el estado general de la flota.
-    - Consulta la **Tabla Detallada** con sistema de semáforo (Rojo/Amarillo/Verde).
-4.  **Exportación:** Descarga el análisis procesado en un nuevo archivo Excel listo para reportar.
+## Configuración
 
-## 🛠️ Requisitos Técnicos
+### Variables de entorno
 
-Para ejecutar este proyecto localmente, necesitas tener instalado Python y las siguientes librerías:
+Creá el archivo `.streamlit/secrets.toml` (no commitear al repo):
+
+```toml
+api_base_url = "<URL_BASE_API_NBCARGO>"
+```
+
+Solo la URL base de la API va en `secrets.toml`. La URL de afectación es dinámica y se gestiona desde la interfaz.
+
+### Archivo de configuración local
+
+`config.json` se genera automáticamente en runtime y almacena:
+
+- `afectacion_url` — URL de la afectación, editable por el usuario en cualquier momento
+- `from_date` / `to_date` — rango de fechas seleccionado
+
+## Requisitos Técnicos
 
 ```text
 streamlit
 pandas
 openpyxl
+requests
 ```
