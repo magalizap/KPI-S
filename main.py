@@ -264,7 +264,7 @@ def process_full_data(trips_df, master_bytes: bytes):
             how="left",
         )
 
-        # Rellenar viajes sin coincidencia en Afectación con "OTROS"
+        #  if no match, assign "OTROS" to negocio principal
         combined_df["negocio principal"] = combined_df["negocio principal"].fillna("OTROS")
 
         if combined_df.empty:
