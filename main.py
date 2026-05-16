@@ -170,7 +170,13 @@ def api_login(username, password):
 def flatten_trip(trip):
     price = pd.to_numeric(get_nested(trip, ["Price"], 0), errors="coerce")
     money_price = pd.to_numeric(get_nested(trip, ["MoneyPrice"], 1), errors="coerce")
-    normalized_price = (price if pd.notna(price) else 0) * (money_price if pd.notna(money_price) else 1)
+    money_symbol = str(get_nested(trip, ["MoneySymbol"], "ARS")).upper().strip()
+    
+    # Solo multiplicar por MoneyPrice si es moneda extranjera (no ARS)
+    if money_symbol != "ARS":
+        normalized_price = (price if pd.notna(price) else 0) * (money_price if pd.notna(money_price) else 1)
+    else:
+        normalized_price = price if pd.notna(price) else 0
 
     return {
         UNIT_COL: str(get_nested(trip, ["Tractor", "Description"], "")).upper().strip(),
@@ -255,8 +261,11 @@ def process_full_data(trips_df, master_bytes: bytes):
             df_master[["patente", "negocio principal"]],
             left_on=UNIT_COL,
             right_on="patente",
-            how="inner",
+            how="left",
         )
+
+        # Rellenar viajes sin coincidencia en Afectación con "OTROS"
+        combined_df["negocio principal"] = combined_df["negocio principal"].fillna("OTROS")
 
         if combined_df.empty:
             return "No se encontraron coincidencias entre API y Afectación.", None
