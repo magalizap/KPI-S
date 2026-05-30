@@ -453,6 +453,15 @@ df = result
 with st.sidebar:
     month_opts = sorted(df["Month_Period"].unique(), reverse=True)
     sel_month = st.selectbox("📅 Mes de Análisis", month_opts)
+    
+    # Filtro de cliente (Dador)
+    cliente_opts = sorted(df["Dador"].dropna().astype(str).unique())
+    sel_cliente = st.selectbox(
+        "🏪 Cliente (Dador)",
+        options=["Todos"] + cliente_opts,
+        index=0
+    )
+    
     st.divider()
     bu_opts = sorted(df["negocio principal"].dropna().astype(str).unique())
     st.write("**🏢 Negocios de Afectación**")
@@ -467,9 +476,17 @@ if not sel_bus:
     st.warning("Selecciona al menos un negocio.")
     st.stop()
 
-df_filtered = df[
-    (df["negocio principal"].astype(str).isin(sel_bus)) & (df["Month_Period"] == sel_month)
-].copy()
+# Filtrado con cliente si aplica
+if sel_cliente == "Todos":
+    df_filtered = df[
+        (df["negocio principal"].astype(str).isin(sel_bus)) & (df["Month_Period"] == sel_month)
+    ].copy()
+else:
+    df_filtered = df[
+        (df["negocio principal"].astype(str).isin(sel_bus)) & 
+        (df["Month_Period"] == sel_month) &
+        (df["Dador"].astype(str) == sel_cliente)
+    ].copy()
 
 if df_filtered.empty:
     st.warning("No hay datos para el mes y afectaciones seleccionadas.")
