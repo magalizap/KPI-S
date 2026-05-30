@@ -500,7 +500,7 @@ with tab_summary:
             delta_color="inverse",
         )
 
-    st.write("### Distribución de Cumplimiento")
+    st.write("### Distribución de Desempeño por Rango")
     summary["Cat_Viajes"] = summary["Viajes"].apply(categorize_trips)
     summary["Cat_Fact"] = summary["Facturación"].apply(categorize_billing)
     summary["Cat_KM"] = summary["KM"].apply(categorize_km)
