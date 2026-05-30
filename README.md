@@ -2,7 +2,7 @@
 
 ![Streamlit App](https://static.streamlit.io)
 
-Dashboard interactivo para validar indicadores clave de desempeño (KPIs) de la flota de transporte. Se conecta a la API de NBCargo para obtener datos de viajes y los cruza con la afectación de unidades.
+Dashboard interactivo para validar indicadores clave de desempeño (KPIs) de la flota de transporte. Se conecta a la API de NBCargo para obtener datos de todos los viajes (independientemente de su estado) y los cruza con la afectación de unidades.
 
 ## Flujo de Uso
 

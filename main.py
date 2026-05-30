@@ -232,10 +232,9 @@ def fetch_trips(token, from_dt, to_dt):
 
     flat_rows = [flatten_trip(t) for t in trips]
     df_trips = pd.DataFrame(flat_rows)
-    df_trips = df_trips[df_trips["TripState"].str.lower() == "cumplido"].copy()
 
     if df_trips.empty:
-        return "No hay viajes en estado 'Cumplido' para el rango seleccionado.", None
+        return "No hay viajes para el rango seleccionado.", None
     return None, df_trips
 
 
@@ -551,7 +550,7 @@ with tab_details:
         st.subheader(f"🔍 Auditoría: Desglose Individual de Viajes - {patente_sel}")
 
         df_auditoria = df_filtered[df_filtered[unit_col] == patente_sel].copy()
-        cols_auditoria = ["Fecha", "Precio Cliente", "Distancia estimada", "Dador", "Chofer", "Origen"]
+        cols_auditoria = ["Fecha", "Precio Cliente", "Distancia estimada", "TripState", "Dador", "Chofer", "Origen"]
         cols_presentes = [col for col in cols_auditoria if col in df_auditoria.columns]
 
         st.dataframe(
@@ -562,6 +561,7 @@ with tab_details:
                 "Precio Cliente": st.column_config.NumberColumn(format="$ %.2f"),
                 "Distancia estimada": st.column_config.NumberColumn(format="%.1f km"),
                 "Fecha": st.column_config.DateColumn(format="DD/MM/YYYY"),
+                "TripState": st.column_config.TextColumn(label="Estado"),
             },
         )
     else:
