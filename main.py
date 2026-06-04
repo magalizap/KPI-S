@@ -269,7 +269,7 @@ def process_full_data(trips_df, master_bytes: bytes):
         if combined_df.empty:
             return "No se encontraron coincidencias entre API y Afectación.", None
 
-        combined_df["Fecha"] = pd.to_datetime(combined_df["Fecha"], dayfirst=True, errors="coerce")
+        combined_df["Fecha"] = pd.to_datetime(combined_df["Fecha"], errors="coerce")
         combined_df = combined_df.dropna(subset=["Fecha"])
         if combined_df.empty:
             return "No hay datos válidos después de limpiar fechas.", None
@@ -451,9 +451,6 @@ if isinstance(result, str):
 df = result
 
 with st.sidebar:
-    month_opts = sorted(df["Month_Period"].unique(), reverse=True)
-    sel_month = st.selectbox("📅 Mes de Análisis", month_opts)
-    
     # Filtro de cliente (Dador)
     cliente_opts = sorted(df["Dador"].dropna().astype(str).unique())
     sel_cliente = st.selectbox(
@@ -476,20 +473,23 @@ if not sel_bus:
     st.warning("Selecciona al menos un negocio.")
     st.stop()
 
-# Filtrado con cliente si aplica
+# Filtrado con cliente si aplica, usando rango de fechas
 if sel_cliente == "Todos":
     df_filtered = df[
-        (df["negocio principal"].astype(str).isin(sel_bus)) & (df["Month_Period"] == sel_month)
+        (df["negocio principal"].astype(str).isin(sel_bus)) & 
+        (df["Fecha"].dt.date >= from_date) & 
+        (df["Fecha"].dt.date <= to_date)
     ].copy()
 else:
     df_filtered = df[
         (df["negocio principal"].astype(str).isin(sel_bus)) & 
-        (df["Month_Period"] == sel_month) &
+        (df["Fecha"].dt.date >= from_date) & 
+        (df["Fecha"].dt.date <= to_date) &
         (df["Dador"].astype(str) == sel_cliente)
     ].copy()
 
 if df_filtered.empty:
-    st.warning("No hay datos para el mes y afectaciones seleccionadas.")
+    st.warning("No hay datos para el rango de fechas y afectaciones seleccionadas.")
     st.stop()
 
 last_report_date = df_filtered["Fecha"].max()
