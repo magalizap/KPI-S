@@ -1,10 +1,42 @@
 import json
 import io
-from datetime import date, datetime, timedelta
-from pathlib import Path
+import logging
+import sys
+from datetime import date, datetime, timedelta, timezone
 import pandas as pd
 import requests
 import streamlit as st
+
+# ─── Configurar Logging ────────────────────────────────────────
+if sys.platform == "win32" and hasattr(sys.stdout, "buffer"):
+    try:
+        sys.stdout = io.TextIOWrapper(sys.stdout.buffer, encoding="utf-8", errors="replace")
+    except ValueError:
+        pass
+
+logging.basicConfig(
+    level=logging.DEBUG,
+    format="%(asctime)s | %(name)s | %(levelname)-8s | %(message)s",
+    handlers=[
+        logging.StreamHandler(sys.stderr),
+    ]
+)
+
+logging.getLogger("cache_manager").setLevel(logging.DEBUG)
+logging.getLogger("redis").setLevel(logging.INFO)
+
+from cache_manager import (
+    init_redis,
+    get_config,
+    set_config,
+    get_trips_cache,
+    set_trips_cache,
+    get_afectacion_cache,
+    set_afectacion_cache,
+    get_session_token,
+    set_session_token,
+    delete_session_token,
+)
 
 st.set_page_config(page_title="Monitor KPIs - Dashboard Operativo", layout="wide")
 
@@ -13,8 +45,6 @@ BILLING_THRESHOLD = 4_000_000
 KM_THRESHOLDS = {"low": 5000, "high": 8000}
 INACTIVITY_THRESHOLD = 7
 UNIT_COL = "patente_viaje"
-TOKEN_CACHE_FILE = Path(".streamlit/token_cache.json")
-CONFIG_FILE = Path("config.json")
 REQUIRED_COLUMNS = {
     "master": ["patente", "negocio principal"],
     "trips": [UNIT_COL, "Fecha", "Precio Cliente", "Distancia estimada", "Viaje"],
@@ -67,66 +97,20 @@ def is_token_valid(token, exp_iso):
         exp_dt = parse_token_exp(token)
     if exp_dt is None:
         return True
-    return datetime.utcnow() < exp_dt - timedelta(minutes=1)
+    return datetime.now(timezone.utc).replace(tzinfo=None) < exp_dt - timedelta(minutes=1)
 
 
-def save_token_cache(token, exp_iso):
-    TOKEN_CACHE_FILE.parent.mkdir(parents=True, exist_ok=True)
-    TOKEN_CACHE_FILE.write_text(
-        json.dumps({"token": token, "exp": exp_iso}, ensure_ascii=False), encoding="utf-8"
-    )
-
-
-def load_token_cache():
-    if not TOKEN_CACHE_FILE.exists():
-        return None, None
-    try:
-        payload = json.loads(TOKEN_CACHE_FILE.read_text(encoding="utf-8"))
-        return payload.get("token"), payload.get("exp")
-    except Exception:
-        return None, None
-
-
-def clear_token_cache():
-    if TOKEN_CACHE_FILE.exists():
-        TOKEN_CACHE_FILE.unlink()
-
-
-def load_config():
-    if not CONFIG_FILE.exists():
-        return {}
-    try:
-        return json.loads(CONFIG_FILE.read_text(encoding="utf-8"))
-    except Exception:
-        return {}
-
-
-def save_config(cfg: dict):
-    CONFIG_FILE.write_text(json.dumps(cfg, ensure_ascii=False, indent=2), encoding="utf-8")
-
-
-def get_default_afectacion_url():
-    cfg = load_config()
-    return cfg.get("afectacion_url", "").strip()
-
-
-def save_afectacion_url(url: str):
-    url = (url or "").strip()
-    if not url:
-        return
-    cfg = load_config()
-    cfg["afectacion_url"] = url
-    save_config(cfg)
-
-
-@st.cache_data(show_spinner=False)
 def fetch_excel_bytes(url: str) -> bytes:
     url = (url or "").strip()
     if not url:
         raise ValueError("La URL de Afectación está vacía.")
+    cached = get_afectacion_cache(url)
+    if cached is not None:
+        return cached
     r = requests.get(url, timeout=60)
     if not r.ok:
         raise RuntimeError(f"No se pudo descargar la Afectación ({r.status_code}).")
+    set_afectacion_cache(url, r.content)
     return r.content
 
 
@@ -201,8 +185,10 @@ def normalize_trips_payload(payload):
     return []
 
 
-@st.cache_data(show_spinner=False)
 def fetch_trips(token, from_dt, to_dt):
+    cached = get_trips_cache(from_dt, to_dt)
+    if cached is not None:
+        return None, cached
     from_param = from_dt.strftime("%Y-%m-%dT00:00:00")
     to_param = to_dt.strftime("%Y-%m-%dT23:59:00")
     url = f"{get_api_base_url()}/Trips/TripPricesList"
@@ -235,10 +221,10 @@ def fetch_trips(token, from_dt, to_dt):
 
     if df_trips.empty:
         return "No hay viajes para el rango seleccionado.", None
+    set_trips_cache(from_dt, to_dt, df_trips)
     return None, df_trips
 
 
-@st.cache_data(show_spinner=False)
 def process_full_data(trips_df, master_bytes: bytes):
     try:
         df_master = pd.read_excel(io.BytesIO(master_bytes), header=0)
@@ -280,8 +266,6 @@ def process_full_data(trips_df, master_bytes: bytes):
         combined_df["Distancia estimada"] = pd.to_numeric(
             combined_df["Distancia estimada"], errors="coerce"
         ).fillna(0)
-        combined_df["Month_Period"] = combined_df["Fecha"].dt.to_period("M").astype(str)
-
         return combined_df, UNIT_COL
     except Exception as exc:
         return f"Error en procesamiento de datos: {exc}", None
@@ -336,11 +320,13 @@ def get_inactivity_style(value):
 def logout():
     st.session_state.pop("api_token", None)
     st.session_state.pop("api_token_exp", None)
-    clear_token_cache()
+    delete_session_token()
 
+
+init_redis(st.secrets["redis_url"])
 
 if "api_token" not in st.session_state:
-    cached_token, cached_exp = load_token_cache()
+    cached_token, cached_exp = get_session_token()
     if is_token_valid(cached_token, cached_exp):
         st.session_state["api_token"] = cached_token
         st.session_state["api_token_exp"] = cached_exp
@@ -367,7 +353,7 @@ if "api_token" not in st.session_state:
                 exp_iso = exp_dt.isoformat() if exp_dt else None
                 st.session_state["api_token"] = token
                 st.session_state["api_token_exp"] = exp_iso
-                save_token_cache(token, exp_iso)
+                set_session_token(token, exp_iso)
                 st.success("Sesión iniciada correctamente.")
                 st.rerun()
 
@@ -376,7 +362,7 @@ if "api_token" not in st.session_state:
 
 with st.sidebar:
     st.header("⚙️ Panel de Control")
-    if st.button("Cerrar sesión", use_container_width=True):
+    if st.button("Cerrar sesión", width='stretch'):
         logout()
         st.rerun()
 
@@ -386,7 +372,7 @@ with st.sidebar:
     next_month = (first_day + timedelta(days=32)).replace(day=1)
     last_day = next_month - timedelta(days=1)
 
-    cfg_dates = load_config()
+    cfg_dates = get_config()
     try:
         from_default = date.fromisoformat(str(cfg_dates.get("from_date")))
     except Exception:
@@ -398,24 +384,25 @@ with st.sidebar:
 
     st.session_state.setdefault("from_date", from_default)
     st.session_state.setdefault("to_date", to_default)
-    from_date = st.date_input("Desde", value=st.session_state["from_date"], key="from_date")
-    to_date = st.date_input("Hasta", value=st.session_state["to_date"], key="to_date")
+    from_date = st.date_input("Desde", key="from_date")
+    to_date = st.date_input("Hasta", key="to_date")
 
-    # Persistir valores (mantiene afectacion_url si ya estaba guardada)
-    cfg_persist = load_config()
+    cfg_persist = get_config()
     cfg_persist["from_date"] = from_date.isoformat()
     cfg_persist["to_date"] = to_date.isoformat()
-    save_config(cfg_persist)
+    set_config(cfg_persist)
 
 with st.expander("📦 Afectación", expanded=False):
-    st.session_state.setdefault("afectacion_url", get_default_afectacion_url())
+    st.session_state.setdefault("afectacion_url", get_config().get("afectacion_url", "").strip())
     url_input = st.text_input("URL de Afectación (.xlsx)", value=st.session_state["afectacion_url"])
     col_url, col_btn = st.columns([2, 1])
     with col_btn:
-        apply_url = st.button("Aplicar URL", use_container_width=True)
+        apply_url = st.button("Aplicar URL", width='stretch')
     if apply_url:
         st.session_state["afectacion_url"] = url_input.strip()
-        save_afectacion_url(st.session_state["afectacion_url"])
+        cfg = get_config()
+        cfg["afectacion_url"] = st.session_state["afectacion_url"]
+        set_config(cfg)
 
 if from_date > to_date:
     st.error("La fecha 'Desde' no puede ser mayor que 'Hasta'.")
@@ -511,11 +498,7 @@ with tab_summary:
         m1.metric("Facturación Total", f"$ {df_filtered['Precio Cliente'].sum():,.0f}")
         m2.metric("Total Viajes", f"{int(df_filtered['Viaje'].sum()):,}")
         m3.metric("Unidades Activas", len(summary))
-        m4.metric(
-            "Inactividad > 7d",
-            len(summary[summary["Inactividad"] > INACTIVITY_THRESHOLD]),
-            delta_color="inverse",
-        )
+        m4.metric("Kilometraje Total", f"{summary['KM'].sum():,.0f} km")
 
     st.write("### Distribución de Desempeño por Rango")
     summary["Cat_Viajes"] = summary["Viajes"].apply(categorize_trips)
@@ -552,7 +535,7 @@ with tab_details:
 
     selection_event = st.dataframe(
         style_table(summary_view),
-        use_container_width=True,
+        width='stretch',
         hide_index=True,
         selection_mode="single-row",
         on_select="rerun",
@@ -572,7 +555,7 @@ with tab_details:
 
         st.dataframe(
             df_auditoria[cols_presentes],
-            use_container_width=True,
+            width='stretch',
             hide_index=True,
             column_config={
                 "Precio Cliente": st.column_config.NumberColumn(format="$ %.2f"),

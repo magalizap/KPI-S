@@ -2,5 +2,4 @@
 .devcontainer/
 __pycache__/
 .streamlit/secrets.toml
-.streamlit/token_cache.json
-config.json
+.logs/*
